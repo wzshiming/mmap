@@ -37,7 +37,9 @@ func Map(f *os.File, prot int) (*MMap, error) {
 }
 
 // MapRegion maps part of a file into memory.
-// offset must be >= 0 and a multiple of the page size; length < 0 maps from offset to EOF, otherwise it must be > 0 and may extend past EOF (a writable Windows mapping grows the file).
+// offset must be >= 0 and a multiple of the page size; length < 0 maps from offset to EOF,
+// otherwise length must be > 0; an explicit length may extend past EOF (on Windows an RDWR
+// mapping grows the file, while RDONLY and COPY mappings past EOF fail).
 func MapRegion(f *os.File, prot int, offset, length int) (*MMap, error) {
 	if f == nil {
 		return nil, os.ErrInvalid
