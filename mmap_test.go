@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -111,21 +112,31 @@ func TestMapRegionInvalid(t *testing.T) {
 	f := testFile(t, testData(2*ps), os.O_RDONLY)
 	empty := testFile(t, nil, os.O_RDONLY)
 	for _, tc := range []struct {
-		name string
-		call func() (*MMap, error)
+		name    string
+		call    func() (*MMap, error)
+		wantErr error
 	}{
-		{"Map nil file", func() (*MMap, error) { return Map(nil, RDONLY) }},
-		{"negative offset", func() (*MMap, error) { return MapRegion(f, RDONLY, -ps, ps) }},
-		{"unaligned offset", func() (*MMap, error) { return MapRegion(f, RDONLY, 1, ps) }},
-		{"offset at EOF", func() (*MMap, error) { return MapRegion(f, RDONLY, 2*ps, -1) }},
-		{"zero length", func() (*MMap, error) { return MapRegion(f, RDONLY, 0, 0) }},
-		{"Map empty file", func() (*MMap, error) { return Map(empty, RDONLY) }},
+		{"Map nil file", func() (*MMap, error) { return Map(nil, RDONLY) }, os.ErrInvalid},
+		{"MapRegion nil file", func() (*MMap, error) { return MapRegion(nil, RDONLY, 0, 10) }, os.ErrInvalid},
+		{"negative offset", func() (*MMap, error) { return MapRegion(f, RDONLY, -ps, ps) }, nil},
+		{"unaligned offset", func() (*MMap, error) { return MapRegion(f, RDONLY, 1, ps) }, nil},
+		{"offset at EOF", func() (*MMap, error) { return MapRegion(f, RDONLY, 2*ps, -1) }, nil},
+		{"zero length", func() (*MMap, error) { return MapRegion(f, RDONLY, 0, 0) }, nil},
+		{"Map empty file", func() (*MMap, error) { return Map(empty, RDONLY) }, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer testRecover(t)
-			if m, err := tc.call(); err == nil {
+			m, err := tc.call()
+			if err == nil {
 				m.Close()
-				t.Error("got a mapping, want a non-nil error")
+				t.Fatal("got a mapping, want a non-nil error")
+			}
+			var errno syscall.Errno
+			if errors.As(err, &errno) {
+				t.Errorf("got syscall error %v, want the arguments rejected before any syscall", err)
+			}
+			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
+				t.Errorf("got error %v, want %v", err, tc.wantErr)
 			}
 		})
 	}
