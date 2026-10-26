@@ -1,8 +1,12 @@
 package mmap
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"math"
 	"os"
+	"runtime"
 )
 
 const (
@@ -19,6 +23,8 @@ const (
 	EXEC
 )
 
+var errNegativeOffset = errors.New("mmap: negative offset")
+
 // MMap represents a file mapped into memory.
 type MMap struct {
 	data []byte
@@ -31,11 +37,17 @@ func Map(f *os.File, prot int) (*MMap, error) {
 }
 
 // MapRegion maps part of a file into memory.
-// The offset parameter must be a multiple of the system's page size.
+// offset must be >= 0 and a multiple of the page size; length < 0 maps from offset to EOF, otherwise it must be > 0 and may extend past EOF (a writable Windows mapping grows the file).
 func MapRegion(f *os.File, prot int, offset, length int) (*MMap, error) {
+	if f == nil {
+		return nil, os.ErrInvalid
+	}
+	if offset < 0 {
+		return nil, errNegativeOffset
+	}
 	pageSize := os.Getpagesize()
 	if offset%pageSize != 0 {
-		return nil, fmt.Errorf("offset parameter must be a multiple of the system's page size %d", pageSize)
+		return nil, fmt.Errorf("mmap: offset parameter must be a multiple of the system's page size %d", pageSize)
 	}
 
 	if length < 0 {
@@ -43,47 +55,100 @@ func MapRegion(f *os.File, prot int, offset, length int) (*MMap, error) {
 		if err != nil {
 			return nil, err
 		}
-		length = int(fi.Size())
+		n := fi.Size() - int64(offset)
+		if n <= 0 || n > math.MaxInt {
+			return nil, fmt.Errorf("mmap: cannot map %d bytes from offset %d to EOF", n, offset)
+		}
+		length = int(n)
+	}
+	if length == 0 {
+		return nil, errors.New("mmap: length must be greater than 0")
 	}
 
-	return mmap(f.Fd(), prot, offset, length)
+	m, err := mmap(f.Fd(), prot, offset, length)
+	runtime.KeepAlive(f)
+	return m, err
 }
 
 // Data returns mapped memory.
+// The slice must not be used after Close.
 func (m *MMap) Data() []byte {
 	return m.data
 }
 
 // Lock keeps the mapped region in physical memory.
 func (m MMap) Lock() error {
+	if m.data == nil {
+		return os.ErrClosed
+	}
 	return m.lock()
 }
 
 // Unlock reverses the effect of Lock.
 func (m MMap) Unlock() error {
+	if m.data == nil {
+		return os.ErrClosed
+	}
 	return m.unlock()
 }
 
 // Flush synchronizes the mapping's contents to the file's contents on disk.
 func (m MMap) Flush() error {
+	if m.data == nil {
+		return os.ErrClosed
+	}
 	return m.flush()
 }
 
 // Close implements the io.Closer interface.
+// It does not flush; after it succeeds, Close, Flush, Lock, Unlock, ReadAt and WriteAt return os.ErrClosed.
 func (m *MMap) Close() error {
-	err := m.unmap()
+	if m.data == nil {
+		return os.ErrClosed
+	}
+	if err := m.unmap(); err != nil {
+		return err
+	}
 	m.data = nil
-	return err
+	return nil
 }
 
 // ReadAt implements the io.ReaderAt interface.
+// It returns io.EOF when fewer than len(dest) bytes are read.
 func (m *MMap) ReadAt(dest []byte, offset int64) (int, error) {
-	return copy(dest, m.data[offset:]), nil
+	if m.data == nil {
+		return 0, os.ErrClosed
+	}
+	if offset < 0 {
+		return 0, errNegativeOffset
+	}
+	if offset > int64(len(m.data)) {
+		return 0, io.EOF
+	}
+	n := copy(dest, m.data[offset:])
+	if n < len(dest) {
+		return n, io.EOF
+	}
+	return n, nil
 }
 
 // WriteAt implements the io.WriterAt interface.
+// It returns io.ErrShortWrite when fewer than len(src) bytes are written.
 func (m *MMap) WriteAt(src []byte, offset int64) (int, error) {
-	return copy(m.data[offset:], src), nil
+	if m.data == nil {
+		return 0, os.ErrClosed
+	}
+	if offset < 0 {
+		return 0, errNegativeOffset
+	}
+	if offset > int64(len(m.data)) {
+		return 0, io.ErrShortWrite
+	}
+	n := copy(m.data[offset:], src)
+	if n < len(src) {
+		return n, io.ErrShortWrite
+	}
+	return n, nil
 }
 
 // Len returns the length of the underlying mapped memory.
