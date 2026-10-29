@@ -56,6 +56,12 @@ func TestReadWrite(t *testing.T) {
 	}
 	m.Data()[9]++
 	want[9]++
+	for i := range want {
+		if b := m.At(i); b != want[i] {
+			t.Errorf("At(%d) = %#x, want %#x", i, b, want[i])
+			break
+		}
+	}
 	got, err := os.ReadFile(f.Name())
 	if err != nil {
 		t.Fatal(err)
@@ -107,10 +113,30 @@ func TestMapRegionToEOF(t *testing.T) {
 	}
 }
 
+func TestMapRegionLength(t *testing.T) {
+	ps := os.Getpagesize()
+	data := testData(2 * ps)
+	m, err := MapRegion(testFile(t, data, os.O_RDONLY), RDONLY, 0, ps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if m.Len() != ps {
+		t.Fatalf("MapRegion(offset 0, length %d) of a %d-byte file: Len() = %d, want %d", ps, 2*ps, m.Len(), ps)
+	}
+	if !bytes.Equal(m.Data(), data[:ps]) {
+		t.Error("Data() does not equal the first length bytes of the file")
+	}
+}
+
 func TestMapRegionInvalid(t *testing.T) {
 	ps := os.Getpagesize()
 	f := testFile(t, testData(2*ps), os.O_RDONLY)
 	empty := testFile(t, nil, os.O_RDONLY)
+	closed := testFile(t, testData(ps), os.O_RDWR)
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct {
 		name    string
 		call    func() (*MMap, error)
@@ -118,9 +144,13 @@ func TestMapRegionInvalid(t *testing.T) {
 	}{
 		{"Map nil file", func() (*MMap, error) { return Map(nil, RDONLY) }, os.ErrInvalid},
 		{"MapRegion nil file", func() (*MMap, error) { return MapRegion(nil, RDONLY, 0, 10) }, os.ErrInvalid},
+		{"MapRegion closed file", func() (*MMap, error) { return MapRegion(closed, RDWR, 0, ps) }, os.ErrClosed},
+		{"MapRegion closed file to EOF", func() (*MMap, error) { return MapRegion(closed, RDONLY, 0, -1) }, os.ErrClosed},
+		{"Map closed file", func() (*MMap, error) { return Map(closed, RDONLY) }, os.ErrClosed},
 		{"negative offset", func() (*MMap, error) { return MapRegion(f, RDONLY, -ps, ps) }, nil},
 		{"unaligned offset", func() (*MMap, error) { return MapRegion(f, RDONLY, 1, ps) }, nil},
 		{"offset at EOF", func() (*MMap, error) { return MapRegion(f, RDONLY, 2*ps, -1) }, nil},
+		{"offset beyond EOF", func() (*MMap, error) { return MapRegion(f, RDONLY, 3*ps, -1) }, nil},
 		{"zero length", func() (*MMap, error) { return MapRegion(f, RDONLY, 0, 0) }, nil},
 		{"Map empty file", func() (*MMap, error) { return Map(empty, RDONLY) }, nil},
 	} {
@@ -158,6 +188,7 @@ func TestReadAt(t *testing.T) {
 	}{
 		{"full", 0, 64, data, nil},
 		{"short", 60, 16, data[60:], io.EOF},
+		{"empty at end", 64, 0, nil, nil},
 		{"at end", 64, 16, nil, io.EOF},
 		{"past end", 65, 16, nil, io.EOF},
 	} {
@@ -182,11 +213,7 @@ func TestReadAt(t *testing.T) {
 }
 
 func TestWriteAt(t *testing.T) {
-	m, err := Map(testFile(t, testData(64), os.O_RDWR), RDWR)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer m.Close()
+	data := testData(64)
 	for _, tc := range []struct {
 		name    string
 		off     int64
@@ -196,23 +223,39 @@ func TestWriteAt(t *testing.T) {
 	}{
 		{"full", 0, 64, 64, nil},
 		{"short", 60, 16, 4, io.ErrShortWrite},
+		{"empty at end", 64, 0, 0, nil},
 		{"at end", 64, 16, 0, io.ErrShortWrite},
 		{"past end", 65, 16, 0, io.ErrShortWrite},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer testRecover(t)
+			m, err := Map(testFile(t, data, os.O_RDWR), RDWR)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer m.Close()
+			// 0xA5 differs from every byte of data, so a write that copies nothing shows.
 			src := bytes.Repeat([]byte{0xA5}, tc.size)
 			n, err := m.WriteAt(src, tc.off)
 			if n != tc.wantN || err != tc.wantErr {
 				t.Errorf("WriteAt(%d bytes, %d) = (%d, %v), want (%d, %v)", tc.size, tc.off, n, err, tc.wantN, tc.wantErr)
 			}
-			if tc.wantErr == nil && !bytes.Equal(m.Data(), src) {
-				t.Error("Data() does not show the bytes written by WriteAt")
+			want := bytes.Clone(data)
+			if tc.wantN > 0 {
+				copy(want[tc.off:], src[:tc.wantN])
+			}
+			if !bytes.Equal(m.Data(), want) {
+				t.Errorf("Data() after WriteAt(%d bytes, %d) = %v, want %v", tc.size, tc.off, m.Data(), want)
 			}
 		})
 	}
 	t.Run("negative offset", func(t *testing.T) {
 		defer testRecover(t)
+		m, err := Map(testFile(t, data, os.O_RDWR), RDWR)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer m.Close()
 		if n, err := m.WriteAt(make([]byte, 16), -1); n != 0 || err == nil {
 			t.Errorf("WriteAt(16 bytes, -1) = (%d, %v), want (0, an error)", n, err)
 		}
