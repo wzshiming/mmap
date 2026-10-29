@@ -40,8 +40,8 @@ func Map(f *os.File, prot int) (*MMap, error) {
 // f must be open (a closed f yields os.ErrClosed).
 // offset must be >= 0 and a multiple of the page size; length < 0 maps from offset to EOF,
 // otherwise length must be > 0; an explicit length may extend past EOF (on Windows an RDWR
-// mapping grows the file, while RDONLY and COPY mappings past EOF fail). On Unix such a mapping
-// succeeds, but accessing a page entirely beyond EOF raises SIGBUS and aborts the process.
+// mapping grows the file, while RDONLY and COPY mappings past EOF fail). On darwin and linux such a
+// mapping succeeds, but accessing a page entirely beyond EOF raises SIGBUS and aborts the process.
 func MapRegion(f *os.File, prot int, offset, length int) (*MMap, error) {
 	if f == nil {
 		return nil, os.ErrInvalid

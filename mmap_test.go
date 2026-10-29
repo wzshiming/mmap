@@ -147,6 +147,7 @@ func TestMapRegionInvalid(t *testing.T) {
 		{"MapRegion closed file", func() (*MMap, error) { return MapRegion(closed, RDWR, 0, ps) }, os.ErrClosed},
 		{"MapRegion closed file to EOF", func() (*MMap, error) { return MapRegion(closed, RDONLY, 0, -1) }, os.ErrClosed},
 		{"Map closed file", func() (*MMap, error) { return Map(closed, RDONLY) }, os.ErrClosed},
+		{"closed file unaligned offset", func() (*MMap, error) { return MapRegion(closed, RDONLY, 1, ps) }, os.ErrClosed},
 		{"negative offset", func() (*MMap, error) { return MapRegion(f, RDONLY, -ps, ps) }, nil},
 		{"unaligned offset", func() (*MMap, error) { return MapRegion(f, RDONLY, 1, ps) }, nil},
 		{"offset at EOF", func() (*MMap, error) { return MapRegion(f, RDONLY, 2*ps, -1) }, nil},
