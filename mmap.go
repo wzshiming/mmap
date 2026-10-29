@@ -37,12 +37,19 @@ func Map(f *os.File, prot int) (*MMap, error) {
 }
 
 // MapRegion maps part of a file into memory.
+// f must be open (a closed f yields os.ErrClosed).
 // offset must be >= 0 and a multiple of the page size; length < 0 maps from offset to EOF,
 // otherwise length must be > 0; an explicit length may extend past EOF (on Windows an RDWR
-// mapping grows the file, while RDONLY and COPY mappings past EOF fail).
+// mapping grows the file, while RDONLY and COPY mappings past EOF fail). On Unix such a mapping
+// succeeds, but accessing a page entirely beyond EOF raises SIGBUS and aborts the process.
 func MapRegion(f *os.File, prot int, offset, length int) (*MMap, error) {
 	if f == nil {
 		return nil, os.ErrInvalid
+	}
+	// Fd is ^uintptr(0) after Close, which Windows would silently map as pagefile memory.
+	fd := f.Fd()
+	if fd == ^uintptr(0) {
+		return nil, os.ErrClosed
 	}
 	if offset < 0 {
 		return nil, errNegativeOffset
@@ -67,7 +74,7 @@ func MapRegion(f *os.File, prot int, offset, length int) (*MMap, error) {
 		return nil, errors.New("mmap: length must be greater than 0")
 	}
 
-	m, err := mmap(f.Fd(), prot, offset, length)
+	m, err := mmap(fd, prot, offset, length)
 	runtime.KeepAlive(f)
 	return m, err
 }
