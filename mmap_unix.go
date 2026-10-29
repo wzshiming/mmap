@@ -1,4 +1,4 @@
-// +build darwin dragonfly freebsd linux openbsd solaris netbsd
+//go:build darwin || linux
 
 package mmap
 

@@ -1,3 +1,3 @@
 module github.com/wzshiming/mmap
 
-go 1.15
+go 1.23
